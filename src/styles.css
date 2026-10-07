@@ -136,3 +136,4 @@ b.big { font-size: 1.3rem; }
 .kv b.small { font-size: .78rem; }
 .kv span { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
 .kv b, .kv .link { flex: 0 1 auto; max-width: 62%; }
+.banner.demo { background: #ede9fe; color: #5b21b6; font-weight: 600; }

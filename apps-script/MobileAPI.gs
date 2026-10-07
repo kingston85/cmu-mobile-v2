@@ -20,6 +20,10 @@
  * data issues and field inspections. Updates and deletions stay on the desktop forms.
  */
 
+/** true = the phones connect with the /exec link only (no email / PIN). Anyone who has the link can read the registers and
+ *  add records, so keep the link inside the CMU. Set to false to require the "Mobile Users" email + PIN sign-in. */
+var MOB_NO_LOGIN = true;
+
 var MOB = { USERS: 'Mobile Users', UPLOADS: 'Mobile Uploads', INSP: 'Mobile Inspections', PHOTOS: 'CMU Inspection Photos', VERSION: '2026.10-1' };
 var MOB_USER_HDR = ['Email', 'Name', 'Role', 'PIN', 'Active', 'Token', 'Last Sync', 'Device'];
 var MOB_UP_HDR = ['Client ID', 'Type', 'Result', 'When', 'User'];
@@ -82,9 +86,9 @@ function doPost(e) {
   var out;
   try {
     var b = JSON.parse(e.postData.contents || '{}');
-    if (b.action === 'login') out = MOB_login_(b);
+    if (b.action === 'login') out = MOB_NO_LOGIN && !b.email ? { ok: true, token: '', user: MOB_openUser_(b.who), open: true } : MOB_login_(b);
     else {
-      var u = MOB_auth_(b.token);
+      var u = MOB_auth_(b.token) || (MOB_NO_LOGIN ? MOB_openUser_(b.who) : null);
       if (!u) out = { ok: false, code: 'auth', error: 'Signed out – please sign in again.' };
       else if (b.action === 'pull') out = MOB_pull_(u);
       else if (b.action === 'push') out = MOB_push_(u, b.items || []);
@@ -141,6 +145,10 @@ function MOB_auth_(token) {
   }
   return null;
 }
+function MOB_openUser_(who) {
+  var n = String(who || '').trim().slice(0, 60);
+  return { email: n ? n : 'mobile-app', name: n || 'Mobile app', role: 'staff', row: 0, sh: null };
+}
 function MOB_log_(u, action, register, id, details) {
   try { EXT_LogSheet_().appendRow([new Date(), u.email + ' (mobile)', action, register || '', String(id || ''), details || '']); } catch (e) { }
 }
@@ -173,7 +181,7 @@ function MOB_pull_(u) {
   if (is && is.getLastRow() > 1) is.getRange(2, 1, is.getLastRow() - 1, MOB_INSP_HDR.length).getValues().forEach(function (r) {
     if (!trim_(r[0])) return; var o = {}; MOB_INSP_HDR.forEach(function (c, j) { o[c] = MOB_ser_(r[j]); }); ins.push(o);
   });
-  u.sh.getRange(u.row, 7).setValue(nowText_());
+  if (u.sh && u.row) u.sh.getRange(u.row, 7).setValue(nowText_());
   return {
     ok: true, serverTime: new Date().toISOString(), user: { email: u.email, name: u.name, role: u.role },
     tables: {

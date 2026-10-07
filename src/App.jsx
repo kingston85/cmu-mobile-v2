@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { App as CapApp } from '@capacitor/app';
 import { Network } from '@capacitor/network';
 import { db, getMeta, getSnapshot, outboxAll, pendingCount, queue, wipe, EMPTY_SNAP } from './lib/store';
-import { login, sync, isOnline, checkItem } from './lib/api';
+import { connect, sync, isOnline, checkItem } from './lib/api';
 import { loadSession, saveSession, clearSession } from './lib/device';
 import { fmtD, fmtWhen, money } from './lib/util';
 import { Header, Card, Row, Empty, Pill } from './screens/ui';
@@ -10,7 +10,7 @@ import { Records, List, Detail, Search, Quotas, OutPill, KINDS } from './screens
 import { CompanyForm, ClearanceForm, PaymentForm, InspectionForm, IssueForm } from './screens/Forms';
 import { Verify, Fee } from './screens/Tools';
 
-const APP_VERSION = '1.1.0';
+const APP_VERSION = '1.2.0';
 const FORMS = { company: CompanyForm, clearance: ClearanceForm, payment: PaymentForm, inspection: InspectionForm, issue: IssueForm };
 const TYPE_LABEL = { company: 'Company', clearance: 'Clearance', payment: 'Payment', inspection: 'Inspection', issue: 'Data issue' };
 
@@ -34,7 +34,7 @@ export default function App() {
 
   const reload = useCallback(async () => {
     const s = await getSnapshot();
-    if (s) { setSnap(s); setHasSnap(true); }
+    if (s) { setSnap(s); setHasSnap(true); } else { setSnap(EMPTY_SNAP); setHasSnap(false); }
     setOutbox(await outboxAll());
     setPending(await pendingCount());
     const last = await getMeta('lastSync');
@@ -55,7 +55,7 @@ export default function App() {
       else if (!quiet) flash('Sync complete');
     } catch (e) {
       setSy(x => ({ ...x, busy: false, error: e.message }));
-      if (e.code === 'auth') return signOut('Your session ended – please sign in again.');
+      if (e.code === 'auth') return signOut('The server refused the connection – connect again.');
       if (!quiet) flash(e.message);
     }
     reload();
@@ -64,7 +64,7 @@ export default function App() {
   /** a form was filled: ask the server for warnings (when online), then keep it on the phone and upload */
   const submit = useCallback(async (type, data, photos = []) => {
     let force = false;
-    if (await isOnline()) {
+    if (!session.demo && (await isOnline())) {
       try {
         const r = await checkItem(session, { type, data });
         if (r.warnings && r.warnings.length) {
@@ -72,12 +72,13 @@ export default function App() {
           force = true;
         }
       } catch (e) {
-        if (e.code === 'auth') { signOut('Your session ended – please sign in again.'); return false; }
+        if (e.code === 'auth') { signOut('The server refused the connection – connect again.'); return false; }
         if (e.server) { alert(e.message); return false; }      // the server said no (e.g. company not registered)
       }
     }
     await queue(type, data, photos, force);
     await reload();
+    if (session.demo) { flash(`${TYPE_LABEL[type]} saved on the phone (sample mode – nothing is uploaded)`); return true; }
     flash(`${TYPE_LABEL[type]} saved on the phone${(await isOnline()) ? ' – uploading…' : ' – it will upload when you have a signal'}`);
     if (await isOnline()) runSync(true);
     return true;
@@ -123,7 +124,8 @@ export default function App() {
   const root = stack[0].screen;
   return (
     <div className="app">
-      {!online && <div className="banner offline">Offline – using the copy from {fmtWhen(sy.last)}{pending ? ` · ${pending} waiting to upload` : ''}</div>}
+      {session.demo && <div className="banner demo">SAMPLE DATA – practice mode, nothing is saved to the CMU Database</div>}
+      {!online && !session.demo && <div className="banner offline">Offline – using the copy from {fmtWhen(sy.last)}{pending ? ` · ${pending} waiting to upload` : ''}</div>}
       {online && sy.busy && <div className="banner busy">{sy.msg}</div>}
       <main>{body}</main>
       <nav className="tabs">
@@ -136,11 +138,10 @@ export default function App() {
   );
 }
 
-/* ---------------- sign in */
+/* ---------------- connect (no sign-in) */
 function Login({ onDone }) {
   const [apiUrl, setApiUrl] = useState('');
-  const [email, setEmail] = useState('');
-  const [pin, setPin] = useState('');
+  const [who, setWho] = useState('');
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
   const submit = async e => {
@@ -148,21 +149,23 @@ function Login({ onDone }) {
     const url = apiUrl.trim();
     if (!/^https:\/\/script\.google\.com\/.+\/exec$/.test(url)) return setErr('Paste the CMU web app link – it starts with https://script.google.com/ and ends with /exec');
     setBusy(true);
-    try { const r = await login(url, email.trim(), pin.trim(), navigator.userAgent.slice(0, 60)); onDone({ apiUrl: url, token: r.token, user: r.user }); }
-    catch (ex) { setErr(ex.message); }
+    try { onDone(await connect(url, who.trim())); }
+    catch (ex) { setErr(ex.code === 'auth' ? 'This server still asks for a PIN. In MobileAPI.gs set MOB_NO_LOGIN = true and deploy a new version.' : ex.message); }
     setBusy(false);
   };
+  const demo = () => onDone({ apiUrl: '', token: '', demo: true, user: { name: who.trim() || 'Demo officer', email: 'demo', role: 'staff' } });
   return (
     <div className="login">
       <div className="brand"><div className="logo">CMU</div><h1>CMU Database</h1><p>Chemical Management Unit · EPA Liberia · ERRS</p></div>
       <form onSubmit={submit} className="card form">
-        <label>Server link<input value={apiUrl} onChange={e => setApiUrl(e.target.value)} placeholder="https://script.google.com/macros/s/…/exec" autoCapitalize="off" autoCorrect="off" /></label>
-        <label>Your email<input type="email" value={email} onChange={e => setEmail(e.target.value)} autoCapitalize="off" /></label>
-        <label>PIN<input type="password" inputMode="numeric" value={pin} onChange={e => setPin(e.target.value)} /></label>
+        <label>CMU Database link<input value={apiUrl} onChange={e => setApiUrl(e.target.value)} placeholder="https://script.google.com/macros/s/…/exec" autoCapitalize="off" autoCorrect="off" /></label>
+        <label>Your name<input value={who} onChange={e => setWho(e.target.value)} placeholder="Shown on the Activity Log" /></label>
         {err && <p className="err">{err}</p>}
-        <button className="primary wide" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button>
-        <p className="muted small">Your CMU admin gives you the link and a PIN (sheet “Mobile Users”).</p>
+        <button className="primary wide" disabled={busy}>{busy ? 'Connecting…' : 'Connect'}</button>
+        <p className="muted small">The link is the Web app URL of the CMU Database (Apps Script ▸ Deploy).</p>
       </form>
+      <button className="wide" onClick={demo}>▶ Try with sample data</button>
+      <p className="muted small center">Practice mode with made-up companies. Nothing is sent anywhere.</p>
       <p className="muted small center">v{APP_VERSION}</p>
     </div>
   );
@@ -267,23 +270,22 @@ function summary(o) {
 
 /* ---------------- settings */
 function Settings({ session, pending, signOut, reload, flash, snap, go }) {
-  const out = () => { if (pending && !confirm(`${pending} record(s) have not been uploaded yet. Sign out anyway? They stay on this phone.`)) return; signOut(); };
+  const out = async () => { if (session.demo) { await wipe(); await reload(); return signOut(); } if (pending && !confirm(`${pending} record(s) have not been uploaded yet. Disconnect anyway? They stay on this phone.`)) return; signOut(); };
   const erase = async () => { if (!confirm('Erase all CMU data on this phone? Records not yet uploaded will be lost.')) return; await wipe(); await reload(); flash('Phone data erased'); };
   const t = snap.tables;
   return (<>
     <Header title="More" />
     <Card>
-      <div className="kv"><span>Signed in as</span><b>{session.user.name}</b></div>
-      <div className="kv"><span>Email</span><b>{session.user.email}</b></div>
+      <div className="kv"><span>Name</span><b>{session.user.name}</b></div>
       <div className="kv"><span>Role</span><b>{session.user.role}</b></div>
-      <div className="kv"><span>Server</span><b className="pre small">{session.apiUrl.replace(/^https:\/\/script\.google\.com\/macros\/s\//, '…/').slice(0, 40)}</b></div>
+      <div className="kv"><span>Connected to</span><b className="pre small">{session.demo ? 'Sample data (practice)' : session.apiUrl.replace(/^https:\/\/script\.google\.com\/macros\/s\//, '…/').slice(0, 40)}</b></div>
     </Card>
     <Card title="On this phone">
       {Object.entries(KINDS).map(([k, K]) => <div className="kv" key={k}><span>{K.label}</span><b>{k === 'clearances' ? new Set(t.clearances.map(c => c['Clearance No.'])).size : k === 'bills' ? snap.insights.bills.length : (t[k] || []).length}</b></div>)}
     </Card>
     <Row title="🔍 Field inspections" sub="Inspections made with the app" onClick={() => go('list', { kind: 'inspections' })} />
     <Row title="📌 Notes & Issues" onClick={() => go('list', { kind: 'issues' })} />
-    <button className="wide" onClick={out}>Sign out</button>
+    <button className="wide" onClick={out}>{session.demo ? 'Leave sample mode' : 'Disconnect'}</button>
     <button className="danger wide" onClick={erase}>Erase data on this phone</button>
     <p className="muted small center">CMU Database mobile v{APP_VERSION} · EPA Liberia · ERRS</p>
   </>);

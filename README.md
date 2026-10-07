@@ -3,6 +3,14 @@
 The phone app for the **CMU DATABASE 2026** Google Sheet (EPA Liberia · ERRS · Chemical Management Unit).
 It works with your real registers, through a small extra file added to the database's Apps Script project.
 
+## Sign-in is OFF for now
+
+* **Try with sample data** on the first screen works straight away: made-up companies, nothing is sent anywhere.
+* To use the real database, the phone only needs the CMU Database **web app link** (`…/exec`) and the officer's name.
+  `MobileAPI.gs` has `var MOB_NO_LOGIN = true;` at the top. Anyone who has the link can read the registers and add
+  records, so keep the link inside the CMU. To switch the email + PIN sign-in back on, set it to `false` and deploy a new version
+  (then fill in the *Mobile Users* sheet, step 1.4 below).
+
 ## What officers can do on the phone
 
 | Works offline | Needs a signal |

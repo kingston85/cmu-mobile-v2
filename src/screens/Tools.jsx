@@ -19,7 +19,7 @@ export function Verify({ session, snap, back, go, flash }) {
     c = String(c || code).trim(); if (!c) return;
     setCode(c); setBusy(true); setRes(null);
     try {
-      if (!(await isOnline())) throw Object.assign(new Error('offline'), { offline: true });
+      if (session.demo || !(await isOnline())) throw Object.assign(new Error('offline'), { offline: true });
       setRes(await verifyCode(session, c));
     } catch (e) {
       if (e.server) flash(e.message);

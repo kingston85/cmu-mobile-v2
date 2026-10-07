@@ -17,9 +17,14 @@ async function call(apiUrl, body) {
 export async function isOnline() {
   try { return (await Network.getStatus()).connected; } catch { return navigator.onLine; }
 }
-export const login = (apiUrl, email, pin, device) => call(apiUrl, { action: 'login', email, pin, device });
-export const verifyCode = (s, code) => call(s.apiUrl, { action: 'verify', token: s.token, code });
-export const checkItem = (s, item) => call(s.apiUrl, { action: 'check', token: s.token, item });
+const B = (s, o) => ({ ...o, token: s.token || '', who: (s.user && s.user.name) || '' });
+/** connect with the server link only (MobileAPI.gs with MOB_NO_LOGIN = true) */
+export async function connect(apiUrl, who) {
+  const r = await call(apiUrl, { action: 'login', who });
+  return { apiUrl, token: r.token || '', user: r.user || { name: who || 'Mobile app', role: 'staff' } };
+}
+export const verifyCode = (s, code) => call(s.apiUrl, B(s, { action: 'verify', code }));
+export const checkItem = (s, item) => call(s.apiUrl, B(s, { action: 'check', item }));
 
 let running = null;
 export function sync(session, progress = () => {}) {
@@ -28,6 +33,12 @@ export function sync(session, progress = () => {}) {
 }
 
 async function run(s, progress) {
+  if (s.demo) {                                   // sample data: nothing leaves the phone
+    const { sampleSnapshot } = await import('./sample');
+    await saveSnapshot(sampleSnapshot());
+    await setMeta('lastSync', new Date().toISOString());
+    return { sent: 0, photos: 0, confirm: 0, errors: 0, demo: true };
+  }
   if (!(await isOnline())) throw new Error('No network. Everything is saved on this phone and will upload later.');
   const out = { sent: 0, photos: 0, confirm: 0, errors: 0 };
 
@@ -37,7 +48,7 @@ async function run(s, progress) {
     for (let i = 0; i < items.length; i += 15) {
       const batch = items.slice(i, i + 15);
       progress(`Uploading ${Math.min(i + 15, items.length)} of ${items.length}…`);
-      const res = await call(s.apiUrl, { action: 'push', token: s.token, items: batch.map(b => ({ cid: b.cid, type: b.type, data: b.data, force: !!b.force })) });
+      const res = await call(s.apiUrl, B(s, { action: 'push', items: batch.map(b => ({ cid: b.cid, type: b.type, data: b.data, force: !!b.force })) }));
       for (const r of res.results) {
         const patch = { status: r.status, warnings: r.warnings || [], error: r.error || '', resultId: r.id || '', sentAt: r.status === 'ok' ? new Date().toISOString() : '' };
         await db.outbox.update(r.cid, patch);
@@ -51,7 +62,7 @@ async function run(s, progress) {
       if (!parent) { await db.photos.delete(p.id); continue; }
       if (parent.status !== 'ok') continue;
       progress(`Uploading photo ${n + 1} of ${photos.length}…`);
-      const r = await call(s.apiUrl, { action: 'photo', token: s.token, photo: { id: p.id, inspectionCid: p.inspectionCid, base64: p.data, taken: p.taken } });
+      const r = await call(s.apiUrl, B(s, { action: 'photo', photo: { id: p.id, inspectionCid: p.inspectionCid, base64: p.data, taken: p.taken } }));
       await db.photos.update(p.id, { uploaded: 1, url: r.url });
       out.photos++;
     }
@@ -59,7 +70,7 @@ async function run(s, progress) {
 
   // 3  download the registers
   progress('Downloading the registers…');
-  const snap = await call(s.apiUrl, { action: 'pull', token: s.token });
+  const snap = await call(s.apiUrl, B(s, { action: 'pull' }));
   await saveSnapshot({ tables: snap.tables, insights: snap.insights, lists: snap.lists, hazards: snap.hazards });
   await setMeta('lastSync', new Date().toISOString());
   // keep uploaded items for 14 days as a history, then forget them
